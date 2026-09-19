@@ -195,6 +195,23 @@ every 2.9 s and has been getting zero phase currents alongside real phase watts.
 total real power, so this appears to have been harmless — but it was inconsistent data, not a
 deliberate choice.
 
+### The offset was held in two sensors that could disagree
+
+Found while verifying the phase fix above, and fixed at the same time. The MQTT offset was kept
+in **two** template sensors — a full value and a half value — each on its own independent
+`0.5 s` update interval. An offset step updated one before the other.
+
+That reached the served registers: **40018** (total watts) uses the full offset, while
+**40019/40020** (phase watts) use the half. So for up to half a second after any offset change,
+the Delta could read a total and phase watts that did not agree. Measured once during a
+15-minute soak at `full=260` against `2 × half = −358` — a 618 W disagreement, matching the
+observed residual of 617 W exactly. It happened 9 times in 900 s.
+
+The half is now derived inline from the full at each of its four use sites, so there is one
+source of truth for the offset and the window is gone. 40018 was always self-consistent, so
+the control path was never affected — this was a consistency defect in the informational
+phase registers.
+
 ## Status
 
 Running continuously on the installation it was written for. It is one person's config for one

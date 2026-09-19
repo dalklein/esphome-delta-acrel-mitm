@@ -227,7 +227,16 @@ sensor:
             // and served register 40003 (Amps Phase A) stuck at 0. Same formula, published from the
             // measurement instead of from a Modbus read.
             if (id(delta_ctrl_mode).state == 0) {
-              int16_t power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+              // 🔑 The half-offset is derived HERE, not held in its own sensor. It used to be
+              // a second template sensor on its own 0.5 s update_interval, which meant an
+              // offset step could leave full and half out of sync for up to half a second --
+              // measured once at full=260 against 2*half=-358, a 618 W disagreement between
+              // the served total (40018, full offset) and the served phase watts (40019/40020,
+              // half). One source of truth removes that window. Keep the isnan guard: this
+              // sensor reads NaN until its first evaluation.
+              const float adj = id(processed_delta_gt_meter_adjust).state;
+              const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
+              int16_t power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + half;
               id(adjusted_power_ph_a).publish_state(power_a_value);
             }
 
@@ -260,7 +269,16 @@ sensor:
             // and served register 40004 (Amps Phase B) stuck at 0. Same formula, published from the
             // measurement instead of from a Modbus read.
             if (id(delta_ctrl_mode).state == 0) {
-              int16_t power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+              // 🔑 The half-offset is derived HERE, not held in its own sensor. It used to be
+              // a second template sensor on its own 0.5 s update_interval, which meant an
+              // offset step could leave full and half out of sync for up to half a second --
+              // measured once at full=260 against 2*half=-358, a 618 W disagreement between
+              // the served total (40018, full offset) and the served phase watts (40019/40020,
+              // half). One source of truth removes that window. Keep the isnan guard: this
+              // sensor reads NaN until its first evaluation.
+              const float adj = id(processed_delta_gt_meter_adjust).state;
+              const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
+              int16_t power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + half;
               id(adjusted_power_ph_b).publish_state(power_b_value);
             }
 
@@ -659,14 +677,6 @@ sensor:
           # cap how fast the offset can change. This re-reads it twice a second so a new
           # command reaches the served value promptly.
 
-  - platform: template
-    id: processed_delta_gt_meter_adjust_half
-    name: "Processed Delta Meter Adjustment Half"
-    lambda: |-
-      float adjustment = id(processed_delta_gt_meter_adjust).state;
-      return std::isnan(adjustment) ? 0 : adjustment / 2;
-    update_interval: .5s
-
   # - platform: template
   #   id: filt_meter_total_real_power
   #   name: "Filtered Meter Total Real Power"
@@ -945,7 +955,9 @@ modbus_server:
           static float _last = 0.0f;
           const float _v = ([&]() -> float {
             if (id(delta_ctrl_mode).state == 1) { return 0; }
-            float power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+            const float adj = id(processed_delta_gt_meter_adjust).state;
+            const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
+            float power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + half;
             return power_a_value;
           })();
           if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
@@ -957,7 +969,9 @@ modbus_server:
           static float _last = 0.0f;
           const float _v = ([&]() -> float {
             if (id(delta_ctrl_mode).state == 1) { return 0; }
-            float power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+            const float adj = id(processed_delta_gt_meter_adjust).state;
+            const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
+            float power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + half;
             return power_b_value;
           })();
           if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
