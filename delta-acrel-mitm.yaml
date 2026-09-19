@@ -50,6 +50,9 @@
 #       does NOT handle NaN for you; serving it means undefined bytes on the wire.
 #     * `command_throttle` is inert; client spacing is `turnaround_time` (default
 #       600 ms, set to 100 ms here).
+#
+# Inspired by PaulSturbo's solis-ct-meter.yaml, which showed an ESPHome modbus server
+# could stand in for a meter. MIT licensed -- see LICENSE and README.md.
 # ============================================================================
 esphome:
   name: delta-acrel-mitm
@@ -602,28 +605,32 @@ sensor:
     id: delta_ctrl_mode
     name: "Delta Control Mode"
     lambda: |-
-      if (id(raw_delta_ctrl_mode).state == NAN) {
-        return 0;  // Use 0 if delta_ctrl_mode is not published
+      // std::isnan, NOT `== NAN`: every comparison with NaN is false, so `== NAN` would
+      // never fire and this would return NaN. Downstream that is not a harmless NaN --
+      // the `delta_ctrl_mode == 0` gate below would be false too, adjusted_meter_power
+      // would never publish, and the server would serve its zero-initialised last value.
+      if (std::isnan(id(raw_delta_ctrl_mode).state)) {
+        return 0;  // no ctrl_mode published yet -> normal pass-through-with-offset
       }
-      return id(raw_delta_ctrl_mode).state;  // Return the state if valid
+      return id(raw_delta_ctrl_mode).state;
 
   - platform: template
     id: delta_ctrl_gain
     name: "Delta Control Gain"
     lambda: |-
-      if (id(raw_delta_ctrl_gain).state == NAN) {
-        return 1.0;  // Use 1 if delta_ctrl_gain is not published
+      if (std::isnan(id(raw_delta_ctrl_gain).state)) {
+        return 1.0;  // no ctrl_gain published yet -> unity gain
       }
-      return id(raw_delta_ctrl_gain).state;  // Return the state if valid
+      return id(raw_delta_ctrl_gain).state;
 
   - platform: template
     id: processed_delta_gt_meter_adjust
     name: "Processed Delta Meter Adjustment"
     lambda: |-
-      if (id(delta_gt_meter_adjust).state == NAN) {
-        return 0;  // Initialize to 0 if no value
+      if (std::isnan(id(delta_gt_meter_adjust).state)) {
+        return 0;  // no offset published yet -> serve the meter unmodified
       }
-      return id(delta_gt_meter_adjust).state;  // Return the state if valid
+      return id(delta_gt_meter_adjust).state;
     update_interval: .5s   # mqtt_subscribe only re-evaluates every 60s by default, which would
           # cap how fast the offset can change. This re-reads it twice a second so a new
           # command reaches the served value promptly.
@@ -633,7 +640,7 @@ sensor:
     name: "Processed Delta Meter Adjustment Half"
     lambda: |-
       float adjustment = id(processed_delta_gt_meter_adjust).state;
-      return adjustment == NAN ? 0 : adjustment / 2;  // Initialize to 0 if no value
+      return std::isnan(adjustment) ? 0 : adjustment / 2;
     update_interval: .5s
 
   # - platform: template

@@ -143,30 +143,28 @@ Things that are easy to find out the hard way:
   passively was checked against an independent listener on the same bus before being trusted;
   the parts that transmit cannot be validated that way.
 
-## Known issue: publish `ctrl_mode` before you rely on this
+## A note on the NaN guards, if you are comparing against an older version
 
-Four guards in the control path are written `if (x.state == NAN)`. In IEEE-754 **every
-comparison with NaN is false**, so those guards never fire and the NaN is returned instead of
-the intended fallback. The rest of the file uses `isnan()` correctly — these four are inherited
-from earlier versions and were missed.
+Four guards in the control path used to read `if (x.state == NAN)`. In IEEE-754 **every
+comparison with NaN is false**, so they never fired and returned the NaN they were meant to
+catch. They now use `std::isnan()`, like the other 45 guards in the file.
 
-What it costs you: an ESPHome sensor reads NaN until its first value arrives, so if nothing has
-published `cmnd/delta-gt-meter/ctrl_mode`, then `delta_ctrl_mode` is NaN, the
-`if (delta_ctrl_mode == 0)` gate that publishes the adjusted power is **false**, and
-`adjusted_meter_power` is never published. The server's read lambdas then find NaN, fall back to
-their `_last` value — which starts at zero — and **the inverter is served 0 W**. That is the
-freeze condition, reached silently at boot.
+This was not cosmetic. An ESPHome sensor reads NaN until its first value arrives, so before
+`cmnd/delta-gt-meter/ctrl_mode` is received, `delta_ctrl_mode` was NaN — which made the
+`if (delta_ctrl_mode == 0)` gate false, so `adjusted_meter_power` never published, so the
+server's read lambdas fell back to their zero-initialised `_last` and **served the inverter
+0 W**. That is the freeze condition, reached silently at boot.
 
-It does not show up in normal operation because a retained `ctrl_mode` on the broker resolves it
-within the first seconds. **Publish `ctrl_mode` retained**, or fix the guards:
+The reason it went unnoticed is worth repeating, because it is easy to assume the wrong
+mitigation: on the installation this came from, `adjust_pwr` and `ctrl_gain` **are** retained,
+so they land the instant MQTT connects — but `ctrl_mode`, the one the gate actually tests, is
+**not**. It only arrives on the controller's next periodic publish, so every boot had a window
+of a few seconds serving zeros, and a boot while the controller was down would have served
+zeros indefinitely.
 
-```cpp
-if (std::isnan(id(raw_delta_ctrl_mode).state)) {   // not `== NAN`
-```
-
-Left as-is here rather than changed blind, because this firmware is in the control path of a
-live inverter and the fix alters boot behaviour. Worth doing deliberately, with the inverter
-watched.
+> 🔑 **Publish `ctrl_mode` retained anyway.** The guard fix removes the failure, but a retained
+> control topic means a freshly booted MITM knows the intended mode immediately rather than
+> assuming a default.
 
 ## Status
 
@@ -181,8 +179,9 @@ you would rewrite; the server half is what the Delta expects and should stay as 
 
 Built by [@dalklein](https://github.com/dalklein) with [Claude Code](https://claude.com/claude-code).
 
-Started from a Modbus MITM YAML shared by **PaulSturbo**, which is what made this approach
-obvious in the first place, and rewritten from there. Discussion and earlier versions:
+Inspired by **PaulSturbo**'s `solis-ct-meter.yaml`, which showed that an ESPHome Modbus server
+could stand in for a meter at all — this config was written from that idea rather than copied
+from it, and targets different hardware on both sides. Discussion and earlier versions:
 [Modbus server enable/disable, modbus sniffer — Home Assistant
 Community](https://community.home-assistant.io/t/modbus-server-enable-disable-modbus-sniffer-solar-battery-inverter-meter-rs485-modbus-rtu-man-in-the-middle/848251).
 
