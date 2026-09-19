@@ -1,0 +1,1309 @@
+# ============================================================================
+# Delta E-series inverter <-> Acrel AGF-AE-D meter, man-in-the-middle on one ESP32.
+#
+# 🔴 THIS FIRMWARE TRANSMITS AND CHANGES INVERTER BEHAVIOUR. Read the README
+#    before flashing it. It sits IN SERIES with the revenue meter: it is the only
+#    thing the inverter can see of the grid, and what it reports steers charge and
+#    discharge. Getting it wrong on a grid-tied system is not a cosmetic failure.
+#
+#   ESP32-WROOM-32, board esp32dev, framework arduino
+#
+#   GPIO16 TX, GPIO17 RX   bus 1, 9600 8N1 -- CLIENT
+#                   This board is master here and polls the real Acrel meter at
+#                   address 2.
+#   GPIO18 TX, GPIO19 RX   bus 2, 9600 8N1 -- SERVER
+#                   The inverter's RGM bus. This board answers the Delta AS the
+#                   meter, at address 2. The Delta is master.
+#
+#   ⚠️ RX/TX cross between the ESP and each RS485-TTL module. The pin labelled TX
+#      on the module goes to the pin labelled RX on the devkit silkscreen. Follow
+#      the comments at each uart, not the silkscreen.
+#
+# WHAT IT DOES
+#   Reads the real meter on bus 1, applies an offset, and serves the result to the
+#   Delta on bus 2. The offset is what gives you control: the inverter runs a
+#   self-consumption loop against the meter reading, so biasing that reading makes
+#   it charge or discharge. The offset arrives over MQTT.
+#
+# CONTROL TOPICS (subscribe side)
+#     cmnd/delta-gt-meter/adjust_pwr   watts to add to the served reading
+#     cmnd/delta-gt-meter/ctrl_mode    0 = pass through with offset, 1 = serve zeros
+#     cmnd/delta-gt-meter/ctrl_gain    scale factor, 1 = normal
+#
+#   ⚠️ ctrl_mode 1 does NOT stop the inverter. Serving zeros makes it FREEZE at
+#      whatever it was doing, because its control loop has no error to act on.
+#      It is a freeze, not a stop.
+#
+# Telemetry is published under the delta/inv/ prefix.
+#
+# ESPHOME VERSION: needs 2026.9.0 or newer, and is stock -- no fork, no patch.
+#   (2026.8 is NOT enough: `reuse_previous_range` does not exist there, and per-sensor
+#   `skip_updates` is still live rather than inert, so the three-controller split below
+#   would poll differently than intended.)
+#   `modbus_controller`'s `server_registers:` was removed upstream; the server side
+#   is the dedicated `modbus_server:` component, which clamps each response to the
+#   requested register count. Three things that matter if you port an older config:
+#     * allow_partial_read: true on every S_DWORD. The default is false, which turns
+#       a read that clips a 32-bit register into an ILLEGAL_DATA_ADDRESS exception --
+#       a response the Delta has never been shown.
+#     * every read_lambda returns optional<T> and declines on NaN/Inf. modbus_server
+#       does NOT handle NaN for you; serving it means undefined bytes on the wire.
+#     * `command_throttle` is inert; client spacing is `turnaround_time` (default
+#       600 ms, set to 100 ms here).
+# ============================================================================
+esphome:
+  name: delta-acrel-mitm
+  friendly_name: Delta Meter
+  on_boot:
+    then:
+      - lambda: App.set_loop_interval(0);
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+  level: WARN   # Keep at WARN, not ERROR: modbus_server logs a declined read at WARN
+                #  and an exception reply at DEBUG, so ERROR hides the two things you
+                #  most want to see if the server side misbehaves.
+#  level: VERBOSE
+  baud_rate: 0
+  
+debug:
+  update_interval: 5s  
+
+mqtt:
+  broker: !secret mqtt_broker_ip
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: "delta/inv"
+  on_disconnect:
+    - logger.log: "MQTT broker not available, continuing execution."
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  networks:
+  - ssid: !secret wifi_ssid_g
+    password: !secret wifi_password
+  - ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Delta Meter Fallback Hotspot"
+    password: !secret ap_password
+
+captive_portal:
+
+sensor:
+  - platform: debug
+    loop_time:
+      name: "Loop Time"
+      
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_med
+    id: meter_PhA_N_Voltage
+    internal: true
+    address: 40008
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_med
+    id: meter_PhB_N_Voltage
+    internal: true
+    address: 40009
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_med
+    id: meter_PhC_N_Voltage
+    internal: true
+    address: 40010
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_med
+    id: meter_LL_Voltage
+    internal: true
+    address: 40011
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "V"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_med
+    id: meter_freq
+    internal: true
+    address: 40016
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "Hz"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client
+    id: meter_total_real_power
+    name: "Meter Total Real Power"
+    # internal: true
+    address: 40018
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: "W"  
+    device_class: power
+    state_class: measurement
+    # 200 ms EMA. alpha = 1 - exp(-dt/tau) = 1 - exp(-0.3/0.2) = 0.78 at the 0.3 s poll.
+    # Filters the MEASUREMENT only -- the MQTT offset is added after this in the on_value
+    # lambda, so a command still acts immediately. Purpose is NOT noise removal: the meter signal
+    # was measured as coherent, not noisy (lag-1 autocorrelation of its differences is +0.50;
+    # white noise would be -0.5). It is to replace the zero-order-hold STAIRCASE with a ramp, so
+    # the Delta's integrator stops seeing a discontinuity at every sample.
+    filters:
+      - exponential_moving_average:
+          alpha: 0.78
+          send_every: 1
+    on_value:
+      then:
+        - lambda: |-
+            if (id(delta_ctrl_mode).state == 0) { 
+              int16_t power_value = (id(meter_total_real_power).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust).state;
+              id(adjusted_meter_power).publish_state(power_value);  // Update the adjusted meter power sensor
+            }
+        # - mqtt.publish:
+        #     topic: "delta/inv/sensor/meter_total_real_power/state"
+        #     payload: !lambda |-
+        #       int16_t mtrp_value = id(meter_total_real_power).state;
+        #       return String(mtrp_value).c_str();
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client
+    id: meter_power_ph_a
+    internal: true
+    address: 40019
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    # 200 ms EMA. alpha = 1 - exp(-dt/tau) = 1 - exp(-0.3/0.2) = 0.78 at the 0.3 s poll.
+    # Filters the MEASUREMENT only -- the MQTT offset is added after this in the on_value
+    # lambda, so a command still acts immediately. Purpose is NOT noise removal: the meter signal
+    # was measured as coherent, not noisy (lag-1 autocorrelation of its differences is +0.50;
+    # white noise would be -0.5). It is to replace the zero-order-hold STAIRCASE with a ramp, so
+    # the Delta's integrator stops seeing a discontinuity at every sample.
+    filters:
+      - exponential_moving_average:
+          alpha: 0.78
+          send_every: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client
+    id: meter_power_ph_b
+    internal: true
+    address: 40020
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    # 200 ms EMA. alpha = 1 - exp(-dt/tau) = 1 - exp(-0.3/0.2) = 0.78 at the 0.3 s poll.
+    # Filters the MEASUREMENT only -- the MQTT offset is added after this in the on_value
+    # lambda, so a command still acts immediately. Purpose is NOT noise removal: the meter signal
+    # was measured as coherent, not noisy (lag-1 autocorrelation of its differences is +0.50;
+    # white noise would be -0.5). It is to replace the zero-order-hold STAIRCASE with a ramp, so
+    # the Delta's integrator stops seeing a discontinuity at every sample.
+    filters:
+      - exponential_moving_average:
+          alpha: 0.78
+          send_every: 1
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client
+    id: meter_power_ph_c
+    internal: true
+    address: 40021
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client
+    id: meter_real_power_scale_factor
+    internal: true
+    address: 40022
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_med
+    id: meter_power_factor
+    name: "Meter Power Factor"  # Auto-published via MQTT
+    address: 40033
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+    # 40033 sits 17 registers past 40016 on the MED controller. Keeping it a read of its own
+    # stops it being merged into a wide range that would drag ~17 unused registers off the
+    # meter every 5 s. (This is the option formerly spelled force_new_range.)
+    reuse_previous_range: false
+    accuracy_decimals: 3  # Match scaling precision
+    filters:
+      - multiply: 0.001  # Apply scaling factor   
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_TotWh_Exp
+    internal: true
+    address: 40038
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_TotWhPhA_Exp
+    internal: true
+    address: 40040
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_TotWhPhB_Exp
+    internal: true
+    address: 40042
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_TotWh_Imp
+    internal: true
+    address: 40046
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_TotWh_ImpPhA
+    internal: true
+    address: 40048
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_TotWh_ImpPhB
+    internal: true
+    address: 40050
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAh_Exp
+    internal: true
+    address: 40055
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAh_ExpPhA
+    internal: true
+    address: 40057
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAh_ExpPhB
+    internal: true
+    address: 40059
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAh_Imp
+    internal: true
+    address: 40063
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAh_ImpPhA
+    internal: true
+    address: 40065
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAh_ImpPhB
+    internal: true
+    address: 40067
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Wh"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAh_scale_factor
+    internal: true
+    address: 40071
+    register_type: read
+    value_type: S_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ1
+    internal: true
+    address: 40072
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ1PhA
+    internal: true
+    address: 40074
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ1PhB
+    internal: true
+    address: 40076
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ1PhC
+    internal: true
+    address: 40078
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ2
+    internal: true
+    address: 40080
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ2PhA
+    internal: true
+    address: 40082
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ2PhB
+    internal: true
+    address: 40084
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ2PhC
+    internal: true
+    address: 40086
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ3
+    internal: true
+    address: 40088
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ3PhA
+    internal: true
+    address: 40090
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_VAHrs_ImpQ3PhB
+    internal: true
+    address: 40092
+    register_type: read
+    value_type: S_DWORD
+    unit_of_measurement: "Vah"
+    device_class: power
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_barcode_a
+    internal: true
+    address: 40117
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_barcode_b
+    internal: true
+    address: 40118
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_barcode_c
+    internal: true
+    address: 40119
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_version
+    internal: true
+    address: 40120
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+  - platform: modbus_controller
+    modbus_controller_id: meter_client_slow
+    id: meter_sw_id_num
+    internal: true
+    address: 40121
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: ""
+    device_class: power
+    state_class: measurement
+
+  - platform: mqtt_subscribe
+    id: delta_gt_meter_adjust
+    name: "Delta Meter Adjustment"
+    topic: "cmnd/delta-gt-meter/adjust_pwr"
+    # update_interval: .5s      not a valid parameter
+    # default is 60s, which is far too slow to notice a new command
+
+  - platform: mqtt_subscribe
+    id: raw_delta_ctrl_mode
+    name: "RawDelta Control Mode"
+    topic: "cmnd/delta-gt-meter/ctrl_mode"
+# 0 - normal meter operation (inverter self-consumption), 1 - disable meter, charge battery from direct PV only
+
+  - platform: mqtt_subscribe
+    id: raw_delta_ctrl_gain
+    name: "RawDelta Control Gain"
+    topic: "cmnd/delta-gt-meter/ctrl_gain"
+# 1 - normal gain
+
+  - platform: template
+    id: delta_ctrl_mode
+    name: "Delta Control Mode"
+    lambda: |-
+      if (id(raw_delta_ctrl_mode).state == NAN) {
+        return 0;  // Use 0 if delta_ctrl_mode is not published
+      }
+      return id(raw_delta_ctrl_mode).state;  // Return the state if valid
+
+  - platform: template
+    id: delta_ctrl_gain
+    name: "Delta Control Gain"
+    lambda: |-
+      if (id(raw_delta_ctrl_gain).state == NAN) {
+        return 1.0;  // Use 1 if delta_ctrl_gain is not published
+      }
+      return id(raw_delta_ctrl_gain).state;  // Return the state if valid
+
+  - platform: template
+    id: processed_delta_gt_meter_adjust
+    name: "Processed Delta Meter Adjustment"
+    lambda: |-
+      if (id(delta_gt_meter_adjust).state == NAN) {
+        return 0;  // Initialize to 0 if no value
+      }
+      return id(delta_gt_meter_adjust).state;  // Return the state if valid
+    update_interval: .5s   # mqtt_subscribe only re-evaluates every 60s by default, which would
+          # cap how fast the offset can change. This re-reads it twice a second so a new
+          # command reaches the served value promptly.
+
+  - platform: template
+    id: processed_delta_gt_meter_adjust_half
+    name: "Processed Delta Meter Adjustment Half"
+    lambda: |-
+      float adjustment = id(processed_delta_gt_meter_adjust).state;
+      return adjustment == NAN ? 0 : adjustment / 2;  // Initialize to 0 if no value
+    update_interval: .5s
+
+  # - platform: template
+  #   id: filt_meter_total_real_power
+  #   name: "Filtered Meter Total Real Power"
+  #   lambda: |-
+  #     float latest_trp = id(meter_total_real_power).state;  // Latest read value
+  #     float new_state =  1.0 * latest_trp;  
+  #     return static_cast<int16_t>(new_state);  // Return as signed 16-bit integer
+
+  - platform: template
+    id: adjusted_meter_power
+    name: "Adjusted Meter Power"
+
+  - platform: template
+    id: adjusted_power_ph_a
+    name: "Adjusted Power Phase A"
+
+  - platform: template
+    id: adjusted_power_ph_b
+    name: "Adjusted Power Phase B"
+
+  # - platform: modbus_controller
+  #   modbus_controller_id: batt_mute_client
+  #   id: lg_110
+  #   internal: true
+  #   address: 110
+  #   register_type: read
+  #   value_type: U_WORD
+  #   unit_of_measurement: ""
+  #   device_class: power
+  #   state_class: measurement
+  #   on_value:
+  #     then:
+  #       - mqtt.publish:
+  #           topic: "delta/inv/lg/110/state"
+  #           payload: !lambda |-
+  #             int value = id(lg_110).state;
+  #             return String(value).c_str();
+  # - platform: modbus_controller
+  #   modbus_controller_id: batt_mute_client
+  #   id: lg_111
+  #   internal: true
+  #   address: 111
+  #   register_type: read
+  #   value_type: U_WORD
+  #   unit_of_measurement: ""
+  #   device_class: power
+  #   state_class: measurement
+  #   on_value:
+  #     then:
+  #       - mqtt.publish:
+  #           topic: "delta/inv/lg/111/state"
+  #           payload: !lambda |-
+  #             int value = id(lg_111).state;
+  #             return String(value).c_str();
+
+uart:
+  - id: moduart_client     # cross rx/tx lines from ESP to ttl-rs485
+    tx_pin: GPIO16   # connected to tx pin on ttl-rs485, labelled rx pin on ESP
+    rx_pin: GPIO17
+    baud_rate: 9600
+    # 🔑 Put rx_full_threshold ABOVE the longest expected reply, so each response is
+    # delivered as ONE chunk and never splits. The longest here is the 23-register read
+    # at 51 bytes; 120 clears it. A split reply is what produces modbus's
+    # "not enough data for value" -- the deadline lands on an inter-chunk boundary.
+    #
+    # ⚠️ Shortening rx_timeout to chase this makes it WORSE, not better: a shorter idle
+    # timeout delivers MORE, SMALLER chunks, i.e. more boundaries to miss. Measured here,
+    # rx_timeout: 1 multiplied the failure rate by 17x. The threshold is the fix; the
+    # timeout only sets how long after the last byte the single chunk is released
+    # (10 char-times = 10.4 ms at 9600, negligible against the 300 ms poll) and it
+    # tolerates a device that pauses mid-response.
+    # 🔴 NEVER rx_timeout: 0 -- that disables the idle interrupt entirely and would strand
+    # every sub-threshold delivery permanently.
+    rx_full_threshold: 120
+    rx_timeout: 10
+    stop_bits: 1
+    data_bits: 8
+    parity: NONE
+
+  - id: moduart_server  # cross rx/tx lines from ESP to ttl-rs485
+    tx_pin: GPIO18   # connected to tx pin on ttl-rs485, labelled rx pin on ESP
+    rx_pin: GPIO19
+    baud_rate: 9600
+    stop_bits: 1
+    data_bits: 8
+    parity: NONE
+  
+modbus:
+  - uart_id: moduart_client
+    id: mod_client
+    # 2026.8: command_throttle on modbus_controller is inert; spacing moved here.
+    # NOTE it is not the same measurement: command_throttle was send-to-send,
+    # turnaround_time is end-of-reply to next request (~one transaction slower).
+    # Default 600ms would roughly halve the bus-1 poll rate -- hold 100ms.
+    turnaround_time: 100ms
+    # Default is 2000ms. When a reply IS dropped the hub is tx_blocked() for the whole wait
+    # -- measured as 2.011 s of fully blocked bus-1 client, ~1.3% dead time, feeding a control
+    # loop that is a pure integrator. Bus-1 request->reply measures 11-20 ms, so 150 ms is
+    # ~8x margin and cuts the cost of each dropped reply by 13x.
+    send_wait_time: 150ms
+  - uart_id: moduart_server
+    id: mod_server
+    role: server
+#    disable_crc: true
+
+modbus_controller:
+  # - id: batt_mute_client   # parse responses from battery, but don't send requests
+  #   address: 15  # address of the LG battery
+  #   modbus_id: mod_server
+  #   command_throttle: 100ms
+  #   setup_priority: -10
+  #   update_interval: 1s
+  # - id: batt_mute_server   # detect request from inverter for battery, don't respond, tell batt_mute_client request was received
+  #   address: 15  # address of the LG battery
+  #   modbus_id: mod_server
+  #   command_throttle: 100ms
+  #   setup_priority: -10
+
+  # ⚠️ Per-sensor `skip_updates` is INERT from 2026.9.0 -- every range is polled each
+  # update_interval. The replacement is one controller per cadence, same address, same hub,
+  # which is why there are three below. Cadences are matched to what the DELTA actually
+  # asks for on bus 2, measured over a full day:
+  #     40018 x5  807,262 req/day = every 107 ms   -> FAST
+  #     40001 x4   30,216         = every 2.9 s    -> fed by MED voltages (slow-moving divisors)
+  #     40008/40016/40033/4004x    ~1,585          = every 54.5 s -> MED is ample
+  #     40088 x5    5,274         = every 16.4 s   -> SLOW; energy counters, staleness immaterial
+  #     40071 x4      196         = every 7.3 min  -> SLOW  (this is the 51-byte 23-register read)
+  #     40078/40086/4010x/4011x/40120/40188  ~12   = every ~2 h -> SLOW
+  # Net effect: LESS bus-1 traffic than skip_updates produced (~2.2 vs ~3.4 transactions/s), and the
+  # 51-byte worst-case frame moves off the control path onto the 60 s tier.
+  - id: meter_client            # FAST - feeds 40018-40022, the block the Delta reads at 107 ms
+    address: 2  # address of the meter - Acrel AGF-AE-D
+    modbus_id: mod_client
+    setup_priority: -210
+    # The Delta re-reads the served W block every ~113 ms (measured over 578,346 intervals,
+    # and constant regardless of whether the meter answers), so this rate sets how stale the
+    # value it reads can be. Budget: one 40018 transaction costs 44 ms of bus time (8.3 request
+    # + 20.0 Acrel latency + 15.6 reply) and the Acrel's latency is p99.99 = 32.8 ms, so 0.3 s
+    # is ~15% duty with large margin. The cycle is max(300, 44+100) = 300 ms, so
+    # update_interval stays the binding constraint and turnaround_time can stay at 100 ms.
+    # ⚠️ A 0.3 s client rate once produced "duplicate modbus command" warnings on ESPHome
+    # 2025.2.0. 2026.9.0 reworked the client queue as a per-frame state machine (#17922), so
+    # it may no longer apply -- but watch the logs for it if you run this faster.
+    update_interval: .3s
+  - id: meter_client_med        # MED - voltages feed the computed current regs (Delta: 2.9 s); Hz, PF
+    address: 2
+    modbus_id: mod_client
+    setup_priority: -210
+    update_interval: 5s
+  - id: meter_client_slow       # SLOW - energy accumulators, barcode, version
+    address: 2
+    modbus_id: mod_client
+    setup_priority: -210
+    update_interval: 60s
+
+modbus_server:
+  - id: meter_server
+    modbus_id: mod_server
+    address: 2          # the Delta Ex-TL-US expects the meter at id 2
+    registers:
+      - address: 40001   # Fixed integer value Sunspec length, inverter checking for meter type?
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return 105;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40002   # est current from adj power and voltage, both A & V are .1 scaling
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return (static_cast<float>(id(adjusted_meter_power).state) / id(meter_LL_Voltage).state);
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40003   # estimate current from power
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return (static_cast<float>(id(adjusted_power_ph_a).state) / id(meter_PhA_N_Voltage).state);
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40004   # estimate current from power
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return (static_cast<float>(id(adjusted_power_ph_b).state) / id(meter_PhB_N_Voltage).state);
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40008
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_PhA_N_Voltage).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40009
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_PhB_N_Voltage).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40010
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_PhC_N_Voltage).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40011
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_LL_Voltage).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40016
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_freq).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40018   # adjusted with mqtt offset & gain, delay if meter_disable = true prevents inverter closed loop control
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) {
+            delay(4000);
+            return 0; }
+            return id(adjusted_meter_power).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40019
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            float power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+            return power_a_value;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40020
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            float power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+            return power_b_value;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40021
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_power_ph_c).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(0);
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40022
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_real_power_scale_factor).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(0);
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40033
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_power_factor).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40038
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_TotWh_Exp).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40040
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_TotWhPhA_Exp).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40042
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_TotWhPhB_Exp).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40046
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_TotWh_Imp).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40048
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_TotWh_ImpPhA).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40050
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_TotWh_ImpPhB).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40055
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAh_Exp).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40057
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAh_ExpPhA).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40059
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAh_ExpPhB).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40063
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAh_Imp).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40065
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAh_ImpPhA).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40067
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAh_ImpPhB).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40071
+        value_type: S_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAh_scale_factor).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int16_t>(_v);
+      - address: 40072
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ1).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40074
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ1PhA).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40076
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ1PhB).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40078
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ1PhC).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40080
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ2).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40082
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ2PhA).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40084
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ2PhB).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40086
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ2PhC).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40088
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ3).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40090
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ3PhA).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40092
+        value_type: S_DWORD
+        allow_partial_read: true
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_VAHrs_ImpQ3PhB).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<int32_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<int32_t>(_v);
+      - address: 40117
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_barcode_a).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40118
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_barcode_b).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40119
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_barcode_c).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40120
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_version).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
+      - address: 40121
+        value_type: U_WORD
+        read_lambda: |-
+          static float _last = 0.0f;
+          const float _v = ([&]() -> float {
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
+            return id(meter_sw_id_num).state;
+          })();
+          if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
+          _last = _v;
+          return static_cast<uint16_t>(_v);
