@@ -627,6 +627,7 @@ sensor:
   - platform: mqtt_subscribe
     id: delta_gt_meter_adjust
     name: "Delta Meter Adjustment"
+    internal: true    # echo of cmnd/delta-gt-meter/adjust_pwr
     topic: "cmnd/delta-gt-meter/adjust_pwr"
     # update_interval: .5s      not a valid parameter
     # default is 60s, which is far too slow to notice a new command
@@ -634,12 +635,14 @@ sensor:
   - platform: mqtt_subscribe
     id: raw_delta_ctrl_mode
     name: "RawDelta Control Mode"
+    internal: true    # echo of cmnd/delta-gt-meter/ctrl_mode
     topic: "cmnd/delta-gt-meter/ctrl_mode"
 # 0 - normal meter operation (inverter self-consumption), 1 - disable meter, charge battery from direct PV only
 
   - platform: mqtt_subscribe
     id: raw_delta_ctrl_gain
     name: "RawDelta Control Gain"
+    internal: true    # echo of cmnd/delta-gt-meter/ctrl_gain
     topic: "cmnd/delta-gt-meter/ctrl_gain"
 # 1 - normal gain
 
@@ -668,6 +671,7 @@ sensor:
   - platform: template
     id: processed_delta_gt_meter_adjust
     name: "Processed Delta Meter Adjustment"
+    internal: true    # 2 Hz resample of a 0.24 Hz command; the command topic is the source
     lambda: |-
       if (std::isnan(id(delta_gt_meter_adjust).state)) {
         return 0;  // no offset published yet -> serve the meter unmodified
@@ -692,10 +696,12 @@ sensor:
   - platform: template
     id: adjusted_power_ph_a
     name: "Adjusted Power Phase A"
+    internal: true    # cache feeding served register 40003; not telemetry
 
   - platform: template
     id: adjusted_power_ph_b
     name: "Adjusted Power Phase B"
+    internal: true    # cache feeding served register 40004; not telemetry
 
   # - platform: modbus_controller
   #   modbus_controller_id: batt_mute_client

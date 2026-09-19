@@ -55,8 +55,20 @@ Three MQTT topics drive it:
 | `cmnd/delta-gt-meter/ctrl_mode` | `0` = pass through with offset, `1` = serve zeros |
 | `cmnd/delta-gt-meter/ctrl_gain` | scale factor, `1` = normal |
 
-Telemetry — the real meter's readings, the served values, and diagnostics — is published under
-`delta/inv/`.
+Telemetry is published under `delta/inv/`. Six topics, deliberately: `adjusted_meter_power`
+(the value actually served to the inverter), `meter_total_real_power` (the real meter, for
+comparison), `meter_power_factor`, `loop_time`, and the effective `delta_control_mode` /
+`delta_control_gain` after their NaN guards.
+
+Everything else is `internal: true`. Intermediate values — the offset resampled at 2 Hz, the
+echoes of the three command topics, the per-phase caches feeding registers 40003/40004 — were
+publishing ~11 msg/s of information already available elsewhere. `internal` stops the MQTT
+publish only; the sensor's state still updates and still feeds the lambdas.
+
+> ⚠️ Do **not** reach for a `throttle` filter to quieten a sensor here. ESPHome applies filters
+> *before* the state update, so a dropped sample also freezes `.state` — and almost every
+> sensor in this config is read by a lambda on the control path. `internal: true` is the safe
+> lever; `throttle` is not.
 
 > ⚠️ **`ctrl_mode: 1` does not stop the inverter.** Serving zeros gives its control loop no
 > error to act on, so it **freezes at whatever it was doing**. It is a freeze, not a stop. If
