@@ -167,63 +167,6 @@ Things that are easy to find out the hard way:
   installation, the "production meter" commissioning option renames the grid meter to ID 3
   with no way back through the inverter's UI.
 
-## A note on the NaN guards, if you are comparing against an older version
-
-Four guards in the control path used to read `if (x.state == NAN)`. In IEEE-754 **every
-comparison with NaN is false**, so they never fired and returned the NaN they were meant to
-catch. They now use `std::isnan()`, like the other 45 guards in the file.
-
-This was not cosmetic. An ESPHome sensor reads NaN until its first value arrives, so before
-`cmnd/delta-gt-meter/ctrl_mode` is received, `delta_ctrl_mode` was NaN — which made the
-`if (delta_ctrl_mode == 0)` gate false, so `adjusted_meter_power` never published, so the
-server's read lambdas fell back to their zero-initialised `_last` and **served the inverter
-0 W**. That is the freeze condition, reached silently at boot.
-
-The reason it went unnoticed is worth repeating, because it is easy to assume the wrong
-mitigation: on the installation this came from, `adjust_pwr` and `ctrl_gain` **are** retained,
-so they land the instant MQTT connects — but `ctrl_mode`, the one the gate actually tests, is
-**not**. It only arrives on the controller's next periodic publish, so every boot had a window
-of a few seconds serving zeros, and a boot while the controller was down would have served
-zeros indefinitely.
-
-> 🔑 **Publish `ctrl_mode` retained anyway.** The guard fix removes the failure, but a retained
-> control topic means a freshly booted MITM knows the intended mode immediately rather than
-> assuming a default.
-
-### Phase A/B currents were served as zero
-
-A related regression, fixed at the same time. Served registers **40003** and **40004** (Amps
-Phase A and B) derive their value from `adjusted_power_ph_a` / `_ph_b` — and nothing wrote to
-those sensors, so they sat at NaN and both registers served **0** permanently.
-
-The history: those two were originally published as a side effect *inside* the 40019/40020
-read lambdas. That was worth removing — a read lambda fires at the Delta's poll rate, so it was
-publishing to MQTT far too often — but removing it also removed the only writer. The values are
-now published from the `on_value` of the phase measurements, the same way `adjusted_meter_power`
-already worked, using the identical formula the 40019/40020 lambdas use.
-
-Consequence if you are running an older build: the Delta reads that block (`40001` ×4) about
-every 2.9 s and has been getting zero phase currents alongside real phase watts. It controls on
-total real power, so this appears to have been harmless — but it was inconsistent data, not a
-deliberate choice.
-
-### The offset was held in two sensors that could disagree
-
-Found while verifying the phase fix above, and fixed at the same time. The MQTT offset was kept
-in **two** template sensors — a full value and a half value — each on its own independent
-`0.5 s` update interval. An offset step updated one before the other.
-
-That reached the served registers: **40018** (total watts) uses the full offset, while
-**40019/40020** (phase watts) use the half. So for up to half a second after any offset change,
-the Delta could read a total and phase watts that did not agree. Measured once during a
-15-minute soak at `full=260` against `2 × half = −358` — a 618 W disagreement, matching the
-observed residual of 617 W exactly. It happened 9 times in 900 s.
-
-The half is now derived inline from the full at each of its four use sites, so there is one
-source of truth for the offset and the window is gone. 40018 was always self-consistent, so
-the control path was never affected — this was a consistency defect in the informational
-phase registers.
-
 ## Status
 
 Running continuously on the installation it was written for. It is one person's config for one
