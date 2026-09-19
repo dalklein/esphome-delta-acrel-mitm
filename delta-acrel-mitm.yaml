@@ -218,6 +218,18 @@ sensor:
       - exponential_moving_average:
           alpha: 0.78
           send_every: 1
+    on_value:
+      then:
+        - lambda: |-
+            // Mirrors meter_total_real_power above. This publish USED to live inside the
+            // 40019/40020 read_lambdas, which fired it at the Delta's poll rate; removing
+            // that also removed the only writer, leaving adjusted_power_ph_a permanently NaN
+            // and served register 40003 (Amps Phase A) stuck at 0. Same formula, published from the
+            // measurement instead of from a Modbus read.
+            if (id(delta_ctrl_mode).state == 0) {
+              int16_t power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+              id(adjusted_power_ph_a).publish_state(power_a_value);
+            }
 
   - platform: modbus_controller
     modbus_controller_id: meter_client
@@ -239,6 +251,18 @@ sensor:
       - exponential_moving_average:
           alpha: 0.78
           send_every: 1
+    on_value:
+      then:
+        - lambda: |-
+            // Mirrors meter_total_real_power above. This publish USED to live inside the
+            // 40019/40020 read_lambdas, which fired it at the Delta's poll rate; removing
+            // that also removed the only writer, leaving adjusted_power_ph_b permanently NaN
+            // and served register 40004 (Amps Phase B) stuck at 0. Same formula, published from the
+            // measurement instead of from a Modbus read.
+            if (id(delta_ctrl_mode).state == 0) {
+              int16_t power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust_half).state;
+              id(adjusted_power_ph_b).publish_state(power_b_value);
+            }
 
   - platform: modbus_controller
     modbus_controller_id: meter_client

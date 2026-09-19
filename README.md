@@ -178,6 +178,23 @@ zeros indefinitely.
 > control topic means a freshly booted MITM knows the intended mode immediately rather than
 > assuming a default.
 
+### Phase A/B currents were served as zero
+
+A related regression, fixed at the same time. Served registers **40003** and **40004** (Amps
+Phase A and B) derive their value from `adjusted_power_ph_a` / `_ph_b` — and nothing wrote to
+those sensors, so they sat at NaN and both registers served **0** permanently.
+
+The history: those two were originally published as a side effect *inside* the 40019/40020
+read lambdas. That was worth removing — a read lambda fires at the Delta's poll rate, so it was
+publishing to MQTT far too often — but removing it also removed the only writer. The values are
+now published from the `on_value` of the phase measurements, the same way `adjusted_meter_power`
+already worked, using the identical formula the 40019/40020 lambdas use.
+
+Consequence if you are running an older build: the Delta reads that block (`40001` ×4) about
+every 2.9 s and has been getting zero phase currents alongside real phase watts. It controls on
+total real power, so this appears to have been harmless — but it was inconsistent data, not a
+deliberate choice.
+
 ## Status
 
 Running continuously on the installation it was written for. It is one person's config for one
