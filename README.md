@@ -154,9 +154,6 @@ Things that are easy to find out the hard way:
 * **Check what your meter's address reassignment does before you touch it.** On this
   installation, the "production meter" commissioning option renames the grid meter to ID 3
   with no way back through the inverter's UI.
-* **Test against a second inverter if you have one.** Everything here that could be measured
-  passively was checked against an independent listener on the same bus before being trusted;
-  the parts that transmit cannot be validated that way.
 
 ## A note on the NaN guards, if you are comparing against an older version
 
