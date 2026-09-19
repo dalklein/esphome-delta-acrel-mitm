@@ -1,0 +1,88 @@
+Field Type,PLC Register,Address,Name,Label,Value,Type,Units,SF,R/W,Description,Notes
+Header,40001,40000,ID,Split phase(ABN) meter,202,uint16,,,R,,
+Header,40002,40001,L,,105,uint16,,,R,Model Length,
+Fixed Block,40003,40002,A,Amps,,int16,A,A_SF,R,TOTAL AC Current,coefficient 0.1
+Fixed Block,40004,40003,AphA,Amps Phase A,,int16,A,A_SF,R,Phase A Current,coefficient 0.1
+Fixed Block,40005,40004,AphB,Amps Phase B,,int16,A,A_SF,R,Phase B Current,coefficient 0.1
+Fixed Block,40006,40005,AphC,Amps Phase C,0,int16,A,A_SF,R,Phase C Current,
+Fixed Block,40007,40006,A_SF,,-1,sunssf,,,R,Current scale factor,
+Fixed Block,40008,40007,PhV,Voltage LN,,int16,V,V_SF,R,Line to Neutral AC Voltage (average of active phases),coefficient 0.1
+Fixed Block,40009,40008,PhVphA,Phase Voltage AN,,int16,V,V_SF,R,Phase Voltage AN,coefficient 0.1
+Fixed Block,40010,40009,PhVphB,Phase Voltage BN,,int16,V,V_SF,R,Phase Voltage BN,coefficient 0.1
+Fixed Block,40011,40010,PhVphC,Phase Voltage CN,0,int16,V,V_SF,R,Phase Voltage CN,
+Fixed Block,40012,40011,PPV,Voltage LL,,int16,V,V_SF,R,Line to Line AC Voltage (average of active phases),coefficient 0.1
+Fixed Block,40013,40012,PhVphAB,,,int16,V,V_SF,R,,coefficient 0.1
+Fixed Block,40014,40013,PhVphBC,,0,int16,V,V_SF,R,,
+Fixed Block,40015,40014,PhVphCA,,0,int16,V,V_SF,R,,
+Fixed Block,40016,40015,V_SF,,-1,sunssf,,,R,Voltage scale factor,
+Fixed Block,40017,40016,Hz,Hz,,int16,Hz,Hz_SF,R,Frequency,coefficient 0.01
+Fixed Block,40018,40017,Hz_SF,,-2,sunssf,,,R,Frequency scale factor,
+Fixed Block,40019,40018,W,Watts,,int16,W,W_SF,R,Total Real Power,"The coefficient is variable. You need to read register 40022. If it is 0, the coefficient is 1. If it is 1, the coefficient is 10."
+Fixed Block,40020,40019,WphA,Watts phase A,,int16,W,W_SF,R,,Same as 40018
+Fixed Block,40021,40020,WphB,Watts phase B,,int16,W,W_SF,R,,Same as 40018
+Fixed Block,40022,40021,WphC,Watts phase C,,int16,W,W_SF,R,,Same as 40018
+Fixed Block,40023,40022,W_SF,,0/1,sunssf,,,R,Real Power Scale Factor,
+Fixed Block,40024,40023,VA,VA,,int16,VA,VA_SF,R,,Same as 40018
+Fixed Block,40025,40024,VAphA,VA phase A,,int16,VA,VA_SF,R,,Same as 40018
+Fixed Block,40026,40025,VAphB,VA phase B,,int16,VA,VA_SF,R,,Same as 40018
+Fixed Block,40027,40026,VAphC,VA phase C,0,int16,VA,VA_SF,R,,
+Fixed Block,40028,40027,VA_SF,,0/1,sunssf,,,R,Apparent Power scale factor,"The apparent power is 1 when it exceeds 32KVA, and 0 when it is less than 24KVA. The interval is 24KVA-32KVA, and the last value is maintained."
+Fixed Block,40029,40028,VAR,VAR,,int16,VAR,VAR_SF,R,Reactive Power,Same as 40018
+Fixed Block,40030,40029,VARphA,VAR phase A,,int16,VAR,VAR_SF,R,,Same as 40018
+Fixed Block,40031,40030,VARphB,VAR phase B,,int16,VAR,VAR_SF,R,,Same as 40018
+Fixed Block,40032,40031,VARphC,VAR phase C,0,int16,VAR,VAR_SF,R,,
+Fixed Block,40033,40032,VAR_SF,,0/1,sunssf,,,R,Reactive Power scale factor,
+Fixed Block,40034,40033,PF,PF,-1000~1000,int16,Pct,PF_SF,R,Power Factor,Coefficient 0.001
+Fixed Block,40035,40034,PFphA,PF phase A,-1000~1000,int16,Pct,PF_SF,R,,Coefficient 0.001
+Fixed Block,40036,40035,PFphB,PF phase B,-1000~1000,int16,Pct,PF_SF,R,,Coefficient 0.001
+Fixed Block,40037,40036,PFphC,PF phase C,0,int16,Pct,PF_SF,R,,
+Fixed Block,40038,40037,PF_SF,,-3,sunssf,,,R,Power Factor scale factor,"The apparent power is 1 when it exceeds 32KVA, and 0 when it is less than 24KVA. The interval is 24KVA-32KVA, and the last value is maintained."
+Fixed Block,40039,40038,TotWhExp,Total Watt-hours Exported,,acc32,Wh,TotWh_SF,R,Total Real Energy Exported,Coefficient 1
+Fixed Block,40041,40040,TotWhExpPhA,Total Watt-hours Exported Phase A,,acc32,Wh,TotWh_SF,R,,Coefficient 1
+Fixed Block,40043,40042,TotWhExpPhB,Total Watt-hours Exported Phase B,,acc32,Wh,TotWh_SF,R,,Coefficient 1
+Fixed Block,40045,40044,TotWhExpPhC,Total Watt-hours Exported Phase C,0,acc32,Wh,TotWh_SF,R,,
+Fixed Block,40047,40046,TotWhImp,Total Watt-hours Imported,,acc32,Wh,TotWh_SF,R,Total Real Energy Imported,Coefficient 1
+Fixed Block,40049,40048,TotWhImpPhA,Total Watt-hours Imported Phase A,,acc32,Wh,TotWh_SF,R,,Coefficient 1
+Fixed Block,40051,40050,TotWhImpPhB,Total Watt-hours Imported Phase B,,acc32,Wh,TotWh_SF,R,,Coefficient 1
+Fixed Block,40053,40052,TotWhImpPhC,Total Watt-hours Imported Phase C,0,acc32,Wh,TotWh_SF,R,,
+Fixed Block,40055,40054,TotWh_SF,,0,sunssf,,,R,Real Energy scale factor,
+Fixed Block,40056,40055,TotVAhExp,Total VA-hours Exported,,acc32,Vah,TotVAh_SF,R,Total Apparent Energy Exported,Coefficient 1
+Fixed Block,40058,40057,TotVAhExpPhA,Total VA-hours Exported Phase A,,acc32,Vah,TotVAh_SF,R,,Coefficient 1
+Fixed Block,40060,40059,TotVAhExpPhB,Total VA-hours Exported Phase B,,acc32,Vah,TotVAh_SF,R,,Coefficient 1
+Fixed Block,40062,40061,TotVAhExpPhC,Total VA-hours Exported Phase C,0,acc32,Vah,TotVAh_SF,R,,
+Fixed Block,40064,40063,TotVAhImp,Total VA-hours Imported,,acc32,Vah,TotVAh_SF,R,Total Apparent Energy Imported,Coefficient 1
+Fixed Block,40066,40065,TotVAhImpPhA,Total VA-hours Imported Phase A,,acc32,Vah,TotVAh_SF,R,,Coefficient 1
+Fixed Block,40068,40067,TotVAhImpPhB,Total VA-hours Imported Phase B,,acc32,Vah,TotVAh_SF,R,,Coefficient 1
+Fixed Block,40070,40069,TotVAhImpPhC,Total VA-hours Imported Phase C,0,acc32,Vah,TotVAh_SF,R,,
+Fixed Block,40072,40071,TotVAh_SF,,0,sunssf,,,R,Apparent Energy scale factor,
+Fixed Block,40073,40072,TotVArhImpQ1,Total VAR-hours Imported Q1,,acc32,varh,TotVArh_SF,R,Total Reactive Energy Imported Quadrant 1,Coefficient 1
+Fixed Block,40075,40074,TotVArhImpQ1PhA,Total VAr-hours Imported Q1 Phase A,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40077,40076,TotVArhImpQ1PhB,Total VAr-hours Imported Q1 Phase B,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40079,40078,TotVArhImpQ1PhC,Total VAr-hours Imported Q1 Phase C,0,acc32,varh,TotVArh_SF,R,,
+Fixed Block,40081,40080,TotVArhImpQ2,Total VAR-hours Imported Q2,,acc32,varh,TotVArh_SF,R,Total Reactive Power Imported Quadrant 2,Coefficient 1
+Fixed Block,40083,40082,TotVArhImpQ2PhA,Total VAr-hours Imported Q2 Phase A,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40085,40084,TotVArhImpQ2PhB,Total VAr-hours Imported Q2 Phase B,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40087,40086,TotVArhImpQ2PhC,Total VAr-hours Imported Q2 Phase C,0,acc32,varh,TotVArh_SF,R,,
+Fixed Block,40089,40088,TotVArhImpQ3,Total VAR-hours Imported Q3,,acc32,varh,TotVArh_SF,R,Total Reactive Power Exported Quadrant 3,Coefficient 1
+Fixed Block,40091,40090,TotVArhImpQ3PhA,Total VAr-hours Imported Q3 Phase A,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40093,40092,TotVArhImpQ3PhB,Total VAr-hours Imported Q3 Phase B,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40095,40094,TotVArhImpQ3PhC,Total VAr-hours Imported Q3 Phase C,0,acc32,varh,TotVArh_SF,R,,
+Fixed Block,40097,40096,TotVArhImpQ4,Total VAR-hours Imported Q4,,acc32,varh,TotVArh_SF,R,Total Reactive Power Exported Quadrant 4,Coefficient 1
+Fixed Block,40099,40098,TotVArhImpQ4PhA,Total VAr-hours Imported Q4 Phase A,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40101,40100,TotVArhImpQ4PhB,Total VAr-hours Imported Q4 Phase B,,acc32,varh,TotVArh_SF,R,,Coefficient 1
+Fixed Block,40103,40102,TotVArhImpQ4PhC,Total VAr-hours Imported Q4 Phase C,0,acc32,varh,TotVArh_SF,R,,
+Fixed Block,40105,40104,TotVArh_SF,,0,sunssf,,,R,Reactive Energy scale factor,
+Fixed Block,40106,40105,Evt,Events,,bitfield32,,,R,Meter Event Flags,
+Fixed Block,40109,40108,Allows clearing of energy flags,,,uint16,,,R/W,,"When set to 0xa5a6, it allows clearing or modifying the energy"
+Fixed Block,40110,40109,Clear all power,,,uint16,,,R/W,,"When register 40108 is 0xa5a6, write address 40109 0xaa55 to clear all"
+Fixed Block,40111,40110,A phase voltage total harmonic distortion rate,,0-1000,uint16,,,R,,Example: A reading of 12 means 1.2%
+Fixed Block,40112,40111,B phase voltage total harmonic distortion rate,,0-1000,uint16,,,R,,
+Fixed Block,40113,40112,C phase voltage total harmonic distortion rate,,0,uint16,,,R,,
+Fixed Block,40114,40113,A phase current total harmonic distortion rate,,0-1000,uint16,,,R,,
+Fixed Block,40115,40114,B phase current total harmonic distortion rate,,0-1000,uint16,,,R,,
+Fixed Block,40116,40115,C phase current total harmonic distortion rate,,0,uint16,,,R,,
+Fixed Block,40118,40117,Barcode,,,uint16,,,R,,BCD value
+Fixed Block,40119,40118,Barcode,,,uint16,,,R,,BCD value
+Fixed Block,40120,40119,Barcode,,,uint16,,,R,,BCD value
+Fixed Block,40121,40120,Version,,,uint16,,,R,,105 means the version is 1.05
+Fixed Block,40122,40121,Software Identification Number,,802/409,uint16,,,R,,"The single indicator light is 802, and the three indicator lights are 409"

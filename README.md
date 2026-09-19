@@ -17,7 +17,8 @@ on an inverter that exposes no such control of its own.
 >
 > Its passive sibling, [**esphome-delta-lg-monitor**](https://github.com/dalklein/esphome-delta-lg-monitor),
 > only listens and can be wired in with no risk of this kind. If you want data rather than
-> control, start there.
+> control, start there.  In fact, you'll want the battery and inverter data, in order to 
+> have your other controls adjust the meter offset. 
 
 ## How it works
 
@@ -124,6 +125,20 @@ will bite:
 cp secrets.yaml.example secrets.yaml   # then fill it in
 esphome run delta-acrel-mitm.yaml
 ```
+
+## Register map
+
+`docs/Acrel_AGF-AE-D_register_map.csv` — the meter's 87 registers, addresses 40000–40121, as a
+SunSpec-shaped map. `docs/Acrel_AGF-AE-D_notes.md` covers how to read it and the three things
+that catch people out:
+
+* **`W_SF` is not constant** — the real-power scale factor switches between coefficient 1 and 10
+  by magnitude. Read it alongside the value every time; never cache it.
+* **`VA_SF` has wide hysteresis** — `1` above 32 kVA, `0` below 24 kVA, and in between it holds
+  its previous value, so the same power can carry either factor.
+* **It is a split-phase (ABN) meter.** Every phase-C register is fixed at 0. They exist because
+  the SunSpec model defines them, not because anything is measured. A non-zero `WphC` on the
+  served side means this firmware is emitting garbage, not that a third phase appeared.
 
 ## Before you build this
 
