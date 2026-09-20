@@ -10,8 +10,8 @@ on an inverter that exposes no such control of its own.
 
 > 🔴 **This one transmits, and it changes what your inverter does.**
 >
-> It sits **in series with the revenue meter**, which means cutting into the meter run, and it
-> becomes the only thing the inverter can see of the grid. A bug here is not a missing sensor
+> It sits **in series with the meter's RS485 link**, and becomes the only thing the inverter
+> can see of the grid. A bug here is not a missing sensor
 > reading — it is an inverter acting on a number you made up. Read [Before you build
 > this](#before-you-build-this).
 >
@@ -156,9 +156,10 @@ that catch people out:
 
 Things that are easy to find out the hard way:
 
-* **The meter run is the grid connection.** Cutting into it is electrical work on the supply
-  side of your system, subject to whatever rules apply where you are. This repo is firmware; it
-  has nothing to say about doing that part safely or legally.
+* **You are splicing the RS485 pair between inverter and meter** — low-voltage signal wiring,
+  not the supply side. The meter's CTs and mains terminals are untouched. Normal care near a
+  mains-connected meter applies, but this is not electrical work on the grid connection, which
+  an earlier version of this README wrongly implied.
 * **Your inverter will act on whatever you serve it.** There is no sanity check between the
   number you publish and the inverter's response. An offset with the wrong sign pushes the
   opposite way.
