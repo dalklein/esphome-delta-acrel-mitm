@@ -28,13 +28,13 @@ Two RS485 buses, one ESP32, opposite roles on each:
 |---|---|---|
 | pins | GPIO16 TX / GPIO17 RX | GPIO18 TX / GPIO19 RX |
 | speed | 9600 8N1 | 9600 8N1 |
-| who is master | **this board** | **the Delta** |
+| who is client | **this board** | **the Delta** |
 | what is on it | the real Acrel meter, address 2 | the Delta, and whatever else is on its RGM bus |
 | this board | polls the meter | **answers as the meter**, address 2 |
 
 ```
-  bus 1   ESP32 (master) ────── real Acrel AGF-AE-D  (addr 2)
-  bus 2   Delta (master) ────── ESP32 answering as the meter (addr 2)
+  bus 1   ESP32 (client) ────── real Acrel AGF-AE-D  (addr 2)
+  bus 2   Delta (client) ────── ESP32 answering as the meter (addr 2)
                           └──── LG RESU battery, and anything else on the RGM bus
 ```
 

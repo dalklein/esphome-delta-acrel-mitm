@@ -9,11 +9,11 @@
 #   ESP32-WROOM-32, board esp32dev, framework arduino
 #
 #   GPIO16 TX, GPIO17 RX   bus 1, 9600 8N1 -- CLIENT
-#                   This board is master here and polls the real Acrel meter at
+#                   This board is the client here and polls the real Acrel meter at
 #                   address 2.
 #   GPIO18 TX, GPIO19 RX   bus 2, 9600 8N1 -- SERVER
 #                   The inverter's RGM bus. This board answers the Delta AS the
-#                   meter, at address 2. The Delta is master.
+#                   meter, at address 2. The Delta is the client.
 #
 #   ⚠️ RX/TX cross between the ESP and each RS485-TTL module. The pin labelled TX
 #      on the module goes to the pin labelled RX on the devkit silkscreen. Follow
