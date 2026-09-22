@@ -8,6 +8,11 @@ That offset is the point. A Delta E runs a self-consumption loop against what th
 it, so biasing the meter reading is a working **control channel** for charge and discharge —
 on an inverter that exposes no such control of its own.
 
+![ESP32 MITM build: two RS485-TTL modules on a breadboard wired to an ESP32 devkit, with the green terminal block marked Meter on one side and Inv on the other](docs/ESP32_rs485_MITM.jpg)
+
+One ESP32, two RS485-TTL modules, and the terminal block that puts it in series — **Meter** in,
+**Inv** out.
+
 > 🔴 **This one transmits, and it changes what your inverter does.**
 >
 > It sits **in series with the meter's RS485 link**, and becomes the only thing the inverter
