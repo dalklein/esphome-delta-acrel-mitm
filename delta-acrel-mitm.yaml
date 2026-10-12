@@ -957,14 +957,16 @@ modbus_server:
           if (std::isnan(_v) || std::isinf(_v)) return static_cast<uint16_t>(_last);  // hold last good, never decline
           _last = _v;
           return static_cast<uint16_t>(_v);
-      - address: 40018   # adjusted with mqtt offset & gain, delay if meter_disable = true prevents inverter closed loop control
+      - address: 40018   # adjusted with mqtt offset & gain; ctrl_mode 1 serves 0 W, which freezes the inverter's closed loop
         value_type: S_WORD
         read_lambda: |-
           static float _last = 0.0f;
           const float _v = ([&]() -> float {
-            if (id(delta_ctrl_mode).state == 1) {
-            delay(4000);
-            return 0; }
+            // 🔴 Never block here. This runs inside the modbus server's parse loop, which drains every
+            // buffered frame in one call: the old delay(4000) met a backlog of 40018 polls, blocked > 5 s
+            // and the board reset every ~70 s (2026-10-12; watchdog inferred). A 0 W reading is zero
+            // error to the Delta's integrating loop, so it holds its output -- the same freeze.
+            if (id(delta_ctrl_mode).state == 1) { return 0; }
             return id(adjusted_meter_power).state;
           })();
           if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
