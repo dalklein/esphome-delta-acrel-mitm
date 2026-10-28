@@ -766,6 +766,12 @@ uart:
     tx_pin: GPIO18   # connected to tx pin on ttl-rs485, labelled rx pin on ESP
     rx_pin: GPIO19
     baud_rate: 9600
+    # Same reason as moduart_client. Without these the threshold defaults to 8 bytes at
+    # 9600, so a 23- or 31-byte LG reply arrives as full 8-byte chunks plus a 7-byte tail,
+    # and the tail has only ~1 ms of margin before the hub takes the gap for the end of the
+    # frame. That split is what logged the occasional pair of partial-frame warnings.
+    rx_full_threshold: 120
+    rx_timeout: 10
     stop_bits: 1
     data_bits: 8
     parity: NONE
