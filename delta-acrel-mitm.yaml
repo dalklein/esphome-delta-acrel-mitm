@@ -88,7 +88,10 @@ mqtt:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    # OTA is encrypted (ESPHome 2026.9+): define ota_key_delta_acrel_mitm in secrets.yaml as a
+    # base64 32-byte key, e.g. `openssl rand -base64 32`. Do not add password: alongside it.
+    encryption:
+      key: !secret ota_key_delta_acrel_mitm
 
 wifi:
   networks:
