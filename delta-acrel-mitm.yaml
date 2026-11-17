@@ -85,6 +85,10 @@ mqtt:
   topic_prefix: "delta/inv"
   on_disconnect:
     - logger.log: "MQTT broker not available, continuing execution."
+  on_connect:
+    # The first adjust_pwr after a (re)subscribe may be a RETAINED message, which proves nothing
+    # about whether the controller is alive. Don't count it as a heartbeat -- see cmd_stale below.
+    - lambda: id(skip_first_cmd) = true;
 
 ota:
   - platform: esphome
@@ -106,6 +110,50 @@ wifi:
     password: !secret ap_password
 
 captive_portal:
+
+# ---------------------------------------------------------------------------
+# Command freshness. The command topics are held at their last value for as long as nothing
+# replaces them. If the controller (or the broker) dies, that would keep serving its last offset
+# indefinitely -- and a frozen non-zero offset makes the inverter keep charging or discharging
+# against a reading that no longer means anything. So adjust_pwr is treated as a heartbeat: if
+# none arrives for cmd_stale_ms, the three command values fall back to stock -- ctrl_mode 0,
+# gain 1, offset 0 -- which is plain pass-through, i.e. the inverter behaves as if the MITM were
+# not there. It never falls back to ctrl_mode 1 (a freeze, not a stop).
+# The controller must therefore republish adjust_pwr periodically even when it is unchanged;
+# set cmd_stale_ms well above that interval.
+# ---------------------------------------------------------------------------
+substitutions:
+  cmd_stale_ms: "90000"
+
+globals:
+  - id: last_cmd_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: cmd_seen          # false until the first live adjust_pwr -> stock values at boot
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: skip_first_cmd
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+
+binary_sensor:
+  - platform: template
+    id: cmd_stale
+    name: "Command Fallback"
+    # ON = no adjust_pwr for cmd_stale_ms -> serving stock pass-through
+    lambda: |-
+      return !id(cmd_seen) || (millis() - id(last_cmd_ms)) > ${cmd_stale_ms};
+    on_press:
+      - logger.log:
+          level: WARN
+          format: "Commands stale -> stock pass-through (mode 0, gain 1, offset 0)"
+    on_release:
+      - logger.log:
+          level: INFO
+          format: "Commands fresh -> controller offset applied again"
 
 sensor:
   - platform: debug
@@ -632,6 +680,11 @@ sensor:
     name: "Delta Meter Adjustment"
     internal: true    # echo of cmnd/delta-gt-meter/adjust_pwr
     topic: "cmnd/delta-gt-meter/adjust_pwr"
+    on_value:   # heartbeat for the command-freshness fallback; fires on every message
+      - lambda: |-
+          if (id(skip_first_cmd)) { id(skip_first_cmd) = false; return; }   // possibly retained
+          id(last_cmd_ms) = millis();
+          id(cmd_seen) = true;
     # update_interval: .5s      not a valid parameter
     # default is 60s, which is far too slow to notice a new command
 
@@ -657,6 +710,7 @@ sensor:
       // never fire and this would return NaN. Downstream that is not a harmless NaN --
       // the `delta_ctrl_mode == 0` gate below would be false too, adjusted_meter_power
       // would never publish, and the server would serve its zero-initialised last value.
+      if (!id(cmd_seen) || (millis() - id(last_cmd_ms)) > ${cmd_stale_ms}) return 0;   // stale commands -> pass-through, never the freeze
       if (std::isnan(id(raw_delta_ctrl_mode).state)) {
         return 0;  // no ctrl_mode published yet -> normal pass-through-with-offset
       }
@@ -666,6 +720,7 @@ sensor:
     id: delta_ctrl_gain
     name: "Delta Control Gain"
     lambda: |-
+      if (!id(cmd_seen) || (millis() - id(last_cmd_ms)) > ${cmd_stale_ms}) return 1.0;   // stale commands -> unity gain
       if (std::isnan(id(raw_delta_ctrl_gain).state)) {
         return 1.0;  // no ctrl_gain published yet -> unity gain
       }
@@ -676,6 +731,7 @@ sensor:
     name: "Processed Delta Meter Adjustment"
     internal: true    # 2 Hz resample of a 0.24 Hz command; the command topic is the source
     lambda: |-
+      if (!id(cmd_seen) || (millis() - id(last_cmd_ms)) > ${cmd_stale_ms}) return 0;   // stale commands -> serve the meter unmodified
       if (std::isnan(id(delta_gt_meter_adjust).state)) {
         return 0;  // no offset published yet -> serve the meter unmodified
       }
