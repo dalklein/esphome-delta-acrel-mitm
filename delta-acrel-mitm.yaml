@@ -240,7 +240,14 @@ sensor:
       then:
         - lambda: |-
             if (id(delta_ctrl_mode).state == 0) { 
-              int16_t power_value = (id(meter_total_real_power).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust).state;
+              // 🔴 Clamp BEFORE the int16 cast. An out-of-range float -> int16 conversion is undefined
+              // and in practice wraps: an offset of -64,500 W once turned a huge export into
+              // +32,564 W, i.e. showed the inverter a huge IMPORT. Check NaN first -- std::min(30000, NaN)
+              // returns 30000, so an unguarded clamp would turn NaN into a full-scale reading.
+              float pv = (id(meter_total_real_power).state) * id(delta_ctrl_gain).state + id(processed_delta_gt_meter_adjust).state;
+              if (std::isnan(pv)) return;
+              pv = std::max(-30000.0f, std::min(30000.0f, pv));
+              int16_t power_value = static_cast<int16_t>(pv);
               id(adjusted_meter_power).publish_state(power_value);  // Update the adjusted meter power sensor
             }
         # - mqtt.publish:
@@ -287,7 +294,10 @@ sensor:
               // sensor reads NaN until its first evaluation.
               const float adj = id(processed_delta_gt_meter_adjust).state;
               const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
-              int16_t power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + half;
+              float pw = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + half;
+              if (std::isnan(pw)) return;
+              pw = std::max(-30000.0f, std::min(30000.0f, pw));   // clamp before the int16 cast -- see 40018 total
+              int16_t power_a_value = static_cast<int16_t>(pw);
               id(adjusted_power_ph_a).publish_state(power_a_value);
             }
 
@@ -329,7 +339,10 @@ sensor:
               // sensor reads NaN until its first evaluation.
               const float adj = id(processed_delta_gt_meter_adjust).state;
               const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
-              int16_t power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + half;
+              float pw = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + half;
+              if (std::isnan(pw)) return;
+              pw = std::max(-30000.0f, std::min(30000.0f, pw));   // clamp before the int16 cast -- see 40018 total
+              int16_t power_b_value = static_cast<int16_t>(pw);
               id(adjusted_power_ph_b).publish_state(power_b_value);
             }
 
@@ -715,6 +728,9 @@ sensor:
         return 0;  // no ctrl_mode published yet -> normal pass-through-with-offset
       }
       return id(raw_delta_ctrl_mode).state;
+    update_interval: .5s   # the 60 s default delayed a mode change -- and the stale fallback -- by up to a minute
+    filters:
+      - delta: 0.001   # evaluate at 2 Hz, publish only on change (retained, so the state stays visible)
 
   - platform: template
     id: delta_ctrl_gain
@@ -725,6 +741,9 @@ sensor:
         return 1.0;  // no ctrl_gain published yet -> unity gain
       }
       return id(raw_delta_ctrl_gain).state;
+    update_interval: .5s   # same as ctrl_mode
+    filters:
+      - delta: 0.001   # evaluate at 2 Hz, publish only on change (retained, so the state stays visible)
 
   - platform: template
     id: processed_delta_gt_meter_adjust
@@ -1046,7 +1065,8 @@ modbus_server:
             const float adj = id(processed_delta_gt_meter_adjust).state;
             const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
             float power_a_value = (id(meter_power_ph_a).state) * id(delta_ctrl_gain).state + half;
-            return power_a_value;
+            if (std::isnan(power_a_value)) return power_a_value;   // let NaN reach the guard below
+            return std::max(-30000.0f, std::min(30000.0f, power_a_value));   // clamp before the int16 cast
           })();
           if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
           _last = _v;
@@ -1060,7 +1080,8 @@ modbus_server:
             const float adj = id(processed_delta_gt_meter_adjust).state;
             const float half = std::isnan(adj) ? 0.0f : adj / 2.0f;
             float power_b_value = (id(meter_power_ph_b).state) * id(delta_ctrl_gain).state + half;
-            return power_b_value;
+            if (std::isnan(power_b_value)) return power_b_value;   // let NaN reach the guard below
+            return std::max(-30000.0f, std::min(30000.0f, power_b_value));   // clamp before the int16 cast
           })();
           if (std::isnan(_v) || std::isinf(_v)) return static_cast<int16_t>(_last);  // hold last good, never decline
           _last = _v;
